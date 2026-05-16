@@ -51,7 +51,7 @@ try {
                    .split("\n")
                    .map(ua => ua.trim())
                    .filter(ua => ua.length > 20);
-    console.log(`✅ Loaded ${userAgents.length} User-Agents`);
+    console.log(`✅ Loaded ${userAgents.length} User-Agentsssssssssssssssssss`);
 } catch (e) {
     console.error("user-agents.txt not found, using default");
     userAgents = ["Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"];

